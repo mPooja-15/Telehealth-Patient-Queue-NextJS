@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import CreateAppointment from "@/components/CreateAppointment";
 
@@ -13,11 +13,14 @@ export default function QueuePage() {
   const [counts, setCounts] = useState({});
   const [providerFilter, setProviderFilter] = useState("");
   const [patientFilter, setPatientFilter] = useState("");
-  const [patientStatusFilter, setPatientStatusFilter] = useState("");
+  const [patientStatusFilter, setPatientStatusFilter] = useState([]); // Changed to array for multi-select
   const [groupStates, setGroupStates] = useState({
     waiting_room: true,
     in_call: true,
   });
+  const [contextMenuOpen, setContextMenuOpen] = useState(null);
+  const [viewPatientModal, setViewPatientModal] = useState(null);
+  const contextMenuRef = useRef();
 
   // Patient status configuration
   const patientStatusOptions = [
@@ -38,6 +41,29 @@ export default function QueuePage() {
     Provider: "bg-indigo-100 text-indigo-800",
     "Ready for Discharge": "bg-amber-100 text-amber-800",
     Discharged: "bg-green-100 text-green-800",
+  };
+
+  // Helper to calculate waiting time
+  const getWaitingTime = (booking) => {
+    if (!booking.booking_time) return null;
+    const now = new Date();
+    const bookingTime = new Date(booking.booking_time);
+    if (booking.status === 'completed') return null;
+    const diffMs = now - bookingTime;
+    if (diffMs < 0) return null;
+    const diffMin = Math.floor(diffMs / 60000);
+    return `${diffMin} min`;
+  };
+
+  // Helper to calculate total wait time (for completed)
+  const getTotalWaitTime = (booking) => {
+    if (!booking.booking_time || !booking.completed_time) return null;
+    const bookingTime = new Date(booking.booking_time);
+    const completedTime = new Date(booking.completed_time);
+    const diffMs = completedTime - bookingTime;
+    if (diffMs < 0) return null;
+    const diffMin = Math.floor(diffMs / 60000);
+    return `${diffMin} min`;
   };
 
   const fetchUserRole = async () => {
@@ -80,7 +106,7 @@ export default function QueuePage() {
       .from("bookings")
       .select(
         `
-        id, provider_name, status, patient_status, booking_time, booking_type, room_status, patient_id, chief_complaint,
+        id, provider_name, status, patient_status, booking_time, booking_type, room_status, patient_id, chief_complaint, completed_time,
         patient:patient_id(name, dob)
       `
       )
@@ -112,10 +138,9 @@ export default function QueuePage() {
             .includes(patientFilter.trim().toLowerCase())
         );
       }
-      if (patientStatusFilter) {
-        filtered = filtered.filter(
-          (b) => b.patient_status === patientStatusFilter
-        );
+      // Multi-status filtering
+      if (patientStatusFilter.length > 0 && patientStatusFilter.length < patientStatusOptions.length) {
+        filtered = filtered.filter((b) => patientStatusFilter.includes(b.patient_status));
       }
       setBookings(filtered);
     } else {
@@ -123,6 +148,19 @@ export default function QueuePage() {
     }
     setLoading(false);
   };
+
+  // Close context menu on click outside
+  useEffect(() => {
+    function handleClick(e) {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target)) {
+        setContextMenuOpen(null);
+      }
+    }
+    if (contextMenuOpen) {
+      document.addEventListener("mousedown", handleClick);
+      return () => document.removeEventListener("mousedown", handleClick);
+    }
+  }, [contextMenuOpen]);
 
   useEffect(() => {
     fetchUserRole();
@@ -182,10 +220,10 @@ export default function QueuePage() {
     };
 
     bookings.forEach((booking) => {
-      if (booking.room_status === "waiting_room") {
+      if (booking.room_status === "waiting") { // Fixed mapping
         groups.waiting_room.bookings.push(booking);
         groups.waiting_room.count++;
-      } else if (booking.room_status === "in_call") {
+      } else if (booking.room_status === "in_room") { // Fixed mapping
         groups.in_call.bookings.push(booking);
         groups.in_call.count++;
       }
@@ -196,6 +234,24 @@ export default function QueuePage() {
 
   const shouldShowJoinCall = (patientStatus) => {
     return ["Ready for provider", "Provider"].includes(patientStatus);
+  };
+
+  const shouldShowIntake = (patientStatus) => {
+    return ["Pending", "Confirmed", "Intake"].includes(patientStatus);
+  };
+
+  // Count patients per status for current tab
+  const statusCounts = patientStatusOptions.reduce((acc, status) => {
+    acc[status] = bookings.filter(b => b.patient_status === status).length;
+    return acc;
+  }, {});
+
+  const handleStatusFilterChange = (status) => {
+    setPatientStatusFilter(prev =>
+      prev.includes(status)
+        ? prev.filter(s => s !== status)
+        : [...prev, status]
+    );
   };
 
   const renderGroup = (groupName, group) => {
@@ -248,8 +304,41 @@ export default function QueuePage() {
   const renderBookingCard = (booking) => (
     <div
       key={booking.id}
-      className="bg-white rounded-lg shadow-sm p-4 border border-gray-100 hover:shadow-md transition-shadow"
+      className="bg-white rounded-lg shadow-sm p-4 border border-gray-100 hover:shadow-md transition-shadow relative"
     >
+      {/* 3-dot context menu */}
+      <div className="absolute top-2 right-2">
+        <button
+          className="p-1 rounded-full hover:bg-gray-200"
+          onClick={() => setContextMenuOpen(contextMenuOpen === booking.id ? null : booking.id)}
+          aria-label="Open context menu"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="5" cy="12" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <circle cx="19" cy="12" r="2"/>
+          </svg>
+        </button>
+        {contextMenuOpen === booking.id && (
+          <div ref={contextMenuRef} className="absolute right-0 mt-2 w-40 bg-white border rounded shadow-lg z-20">
+            <button
+              className="block w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={() => { setViewPatientModal(booking); setContextMenuOpen(null); }}
+            >
+              View Patient
+            </button>
+            {shouldShowIntake(booking.patient_status) && (
+              <button
+                className="block w-full text-left px-4 py-2 hover:bg-gray-100"
+                onClick={() => { console.log("Intake action"); setContextMenuOpen(null); }}
+              >
+                Intake
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-4 mb-3">
         <div>
           <p className="text-sm text-gray-500">Patient</p>
@@ -278,11 +367,18 @@ export default function QueuePage() {
                 )}`}
           </p>
         </div>
-      </div>
-
-      <div className="mb-3">
-        <p className="text-sm text-gray-500">Reason for Visit</p>
-        <p className="font-medium">{booking.chief_complaint || "Not specified"}</p>
+        <div>
+          <p className="text-sm text-gray-500">Chief Complaint</p>
+          <p>{booking.chief_complaint || 'N/A'}</p>
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Waiting Time</p>
+          <p>{getWaitingTime(booking) || 'N/A'}</p>
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Total Wait Time</p>
+          <p>{getTotalWaitTime(booking) || 'N/A'}</p>
+        </div>
       </div>
 
       <div className="flex justify-between items-center pt-3">
@@ -326,6 +422,30 @@ export default function QueuePage() {
       </div>
     </div>
   );
+
+  // Patient details modal
+  const renderPatientModal = () => {
+    if (!viewPatientModal) return null;
+    const b = viewPatientModal;
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md relative">
+          <button className="absolute top-2 right-2 text-gray-500 hover:text-gray-700" onClick={() => setViewPatientModal(null)}>&times;</button>
+          <h2 className="text-xl font-bold mb-4">Patient Details</h2>
+          <div className="mb-2"><b>Name:</b> {b.patient?.name}</div>
+          <div className="mb-2"><b>DOB:</b> {b.patient?.dob ? new Date(b.patient.dob).toLocaleDateString() : 'N/A'}</div>
+          <div className="mb-2"><b>Provider:</b> {b.provider_name}</div>
+          <div className="mb-2"><b>Status:</b> {b.patient_status}</div>
+          <div className="mb-2"><b>Type:</b> {b.booking_type}</div>
+          <div className="mb-2"><b>Booking Time:</b> {b.booking_time ? new Date(b.booking_time).toLocaleString() : 'N/A'}</div>
+          <div className="mb-2"><b>Room Status:</b> {b.room_status}</div>
+          <div className="mb-2"><b>Chief Complaint:</b> {b.chief_complaint || 'N/A'}</div>
+          <div className="mb-2"><b>Waiting Time:</b> {getWaitingTime(b) || 'N/A'}</div>
+          <div className="mb-2"><b>Total Wait Time:</b> {getTotalWaitTime(b) || 'N/A'}</div>
+        </div>
+      </div>
+    );
+  };
 
   const renderTabs = () => {
     const tabs = [
@@ -503,20 +623,28 @@ export default function QueuePage() {
               />
             </div>
             <div className="relative">
-              <select
-                className="block w-full h-[42px] pl-3 pr-10 py-2 border border-gray-300 rounded-lg bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-400"
-                value={patientStatusFilter}
-                onChange={(e) => setPatientStatusFilter(e.target.value)}
-              >
-                <option value="" className="text-gray-400">
-                  All Patient Statuses
-                </option>
-                {patientStatusOptions.map((status) => (
-                  <option key={status} value={status} className="text-gray-400">
-                    {status}
-                  </option>
-                ))}
-              </select>
+              <div className="block w-full pl-3 pr-10 py-2 border border-gray-300 rounded-lg bg-white shadow-sm">
+                <div className="font-medium mb-1">Patient Status</div>
+                <div className="max-h-48 overflow-y-auto">
+                  {patientStatusOptions.map((status) => (
+                    <label key={status} className="flex items-center space-x-2 py-1 px-2 hover:bg-gray-50 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={patientStatusFilter.includes(status)}
+                        onChange={() => handleStatusFilterChange(status)}
+                        className="form-checkbox h-4 w-4 text-blue-600"
+                      />
+                      <span>{status} <span className="ml-1 text-xs text-gray-500">({statusCounts[status]})</span></span>
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="mt-2 text-xs text-blue-600 underline"
+                  onClick={() => setPatientStatusFilter([])}
+                >
+                  Clear All
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -534,6 +662,7 @@ export default function QueuePage() {
           }}
         />
       )}
+      {renderPatientModal()}
     </div>
   );
 }
