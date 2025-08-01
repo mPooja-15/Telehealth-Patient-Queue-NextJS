@@ -1,4 +1,4 @@
-'use client';
+"use client";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import CreateAppointment from "@/components/CreateAppointment";
@@ -14,6 +14,10 @@ export default function QueuePage() {
   const [providerFilter, setProviderFilter] = useState("");
   const [patientFilter, setPatientFilter] = useState("");
   const [patientStatusFilter, setPatientStatusFilter] = useState("");
+  const [groupStates, setGroupStates] = useState({
+    waiting_room: true,
+    in_call: true,
+  });
 
   // Patient status configuration
   const patientStatusOptions = [
@@ -23,7 +27,7 @@ export default function QueuePage() {
     "Ready for provider",
     "Provider",
     "Ready for Discharge",
-    "Discharged"
+    "Discharged",
   ];
 
   const patientStatusColors = {
@@ -76,7 +80,7 @@ export default function QueuePage() {
       .from("bookings")
       .select(
         `
-        id, provider_name, status, patient_status, booking_time, booking_type, room_status, patient_id,
+        id, provider_name, status, patient_status, booking_time, booking_type, room_status, patient_id, chief_complaint,
         patient:patient_id(name, dob)
       `
       )
@@ -109,8 +113,8 @@ export default function QueuePage() {
         );
       }
       if (patientStatusFilter) {
-        filtered = filtered.filter((b) =>
-          b.patient_status === patientStatusFilter
+        filtered = filtered.filter(
+          (b) => b.patient_status === patientStatusFilter
         );
       }
       setBookings(filtered);
@@ -156,23 +160,87 @@ export default function QueuePage() {
     }
   };
 
-  const renderTabs = () => {
-    const tabs = ["prebooked", "in_office", "completed"];
+  const toggleGroup = (groupName) => {
+    setGroupStates((prev) => ({
+      ...prev,
+      [groupName]: !prev[groupName],
+    }));
+  };
+
+  const groupBookingsByRoomStatus = () => {
+    const groups = {
+      waiting_room: {
+        name: "Waiting Room",
+        bookings: [],
+        count: 0,
+      },
+      in_call: {
+        name: "In Call",
+        bookings: [],
+        count: 0,
+      },
+    };
+
+    bookings.forEach((booking) => {
+      if (booking.room_status === "waiting_room") {
+        groups.waiting_room.bookings.push(booking);
+        groups.waiting_room.count++;
+      } else if (booking.room_status === "in_call") {
+        groups.in_call.bookings.push(booking);
+        groups.in_call.count++;
+      }
+    });
+
+    return groups;
+  };
+
+  const shouldShowJoinCall = (patientStatus) => {
+    return ["Ready for provider", "Provider"].includes(patientStatus);
+  };
+
+  const renderGroup = (groupName, group) => {
+    if (group.count === 0) return null;
+
     return (
-      <div className="flex space-x-2 mb-6">
-        {tabs.map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setStatusFilter(tab)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-              statusFilter === tab
-                ? "bg-blue-600 text-white shadow-md"
-                : "bg-white text-gray-600 hover:bg-gray-100"
+      <div key={groupName} className="mb-6">
+        <div
+          className="flex justify-between items-center bg-gray-50 p-3 rounded-t-lg border border-gray-200 cursor-pointer"
+          onClick={() => toggleGroup(groupName)}
+        >
+          <div className="flex items-center">
+            <h3 className="font-medium text-gray-800">{group.name}</h3>
+            <span
+              className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
+                groupName === "waiting_room"
+                  ? "bg-blue-100 text-blue-800"
+                  : "bg-green-100 text-green-800"
+              }`}
+            >
+              {group.count}
+            </span>
+          </div>
+          <svg
+            className={`w-5 h-5 text-gray-500 transform transition-transform ${
+              groupStates[groupName] ? "rotate-180" : ""
             }`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
           >
-            {tab.replace("_", " ").toUpperCase()} ({counts[tab] || 0})
-          </button>
-        ))}
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </div>
+
+        {groupStates[groupName] && (
+          <div className="space-y-3 p-3 border-l border-r border-b border-gray-200 rounded-b-lg">
+            {group.bookings.map((booking) => renderBookingCard(booking))}
+          </div>
+        )}
       </div>
     );
   };
@@ -180,7 +248,7 @@ export default function QueuePage() {
   const renderBookingCard = (booking) => (
     <div
       key={booking.id}
-      className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 hover:shadow-md transition-shadow mb-4"
+      className="bg-white rounded-lg shadow-sm p-4 border border-gray-100 hover:shadow-md transition-shadow"
     >
       <div className="grid grid-cols-2 gap-4 mb-3">
         <div>
@@ -212,6 +280,11 @@ export default function QueuePage() {
         </div>
       </div>
 
+      <div className="mb-3">
+        <p className="text-sm text-gray-500">Reason for Visit</p>
+        <p className="font-medium">{booking.chief_complaint || "Not specified"}</p>
+      </div>
+
       <div className="flex justify-between items-center pt-3">
         <div>
           {booking.patient_status && (
@@ -227,22 +300,125 @@ export default function QueuePage() {
             </div>
           )}
         </div>
-        {role !== "patient" && booking.status !== "completed" && (
-          <button
-            className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full transition-colors"
-            onClick={() =>
-              updateBookingStatus(
-                booking.id,
-                booking.status === "prebooked" ? "in_office" : "completed"
-              )
-            }
-          >
-            Move to {booking.status === "prebooked" ? "In Office" : "Completed"}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {shouldShowJoinCall(booking.patient_status) && (
+            <button
+              className="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-full transition-colors"
+              onClick={() => console.log("Join call clicked")}
+            >
+              Join Call
+            </button>
+          )}
+          {role !== "patient" && booking.status !== "completed" && (
+            <button
+              className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full transition-colors"
+              onClick={() =>
+                updateBookingStatus(
+                  booking.id,
+                  booking.status === "prebooked" ? "in_office" : "completed"
+                )
+              }
+            >
+              Move to {booking.status === "prebooked" ? "In Office" : "Completed"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
+
+  const renderTabs = () => {
+    const tabs = [
+      {
+        id: "prebooked",
+        name: "Prebooked",
+        color: "bg-blue-100 text-blue-800",
+      },
+      {
+        id: "in_office",
+        name: "In Office",
+        color: "bg-green-100 text-green-800",
+      },
+      {
+        id: "completed",
+        name: "Completed",
+        color: "bg-purple-100 text-purple-800",
+      },
+    ];
+
+    return (
+      <div className="flex space-x-2 mb-6">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setStatusFilter(tab.id)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors flex items-center ${
+              statusFilter === tab.id
+                ? "bg-blue-600 text-white shadow-md"
+                : "bg-white text-gray-600 hover:bg-gray-100"
+            }`}
+          >
+            <span>{tab.name}</span>
+            <span
+              className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
+                statusFilter === tab.id ? "bg-white text-blue-600" : tab.color
+              }`}
+            >
+              {counts[tab.id] || 0}
+            </span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <div className="flex justify-center items-center h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+        </div>
+      );
+    }
+
+    if (bookings.length === 0) {
+      return (
+        <div className="text-center py-10">
+          <svg
+            className="mx-auto h-12 w-12 text-gray-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <h3 className="mt-2 text-lg font-medium text-gray-900">
+            No bookings found
+          </h3>
+          <p className="mt-1 text-gray-500">
+            There are currently no appointments in this category.
+          </p>
+        </div>
+      );
+    }
+
+    if (statusFilter === "in_office") {
+      const groups = groupBookingsByRoomStatus();
+      return (
+        <div>
+          {renderGroup("waiting_room", groups.waiting_room)}
+          {renderGroup("in_call", groups.in_call)}
+        </div>
+      );
+    }
+
+    return <div className="space-y-4">{bookings.map(renderBookingCard)}</div>;
+  };
 
   return (
     <div className="max-w-5xl mx-auto mt-8 p-6">
@@ -328,13 +504,15 @@ export default function QueuePage() {
             </div>
             <div className="relative">
               <select
-                className="block w-full pl-3 pr-10 py-2 border border-gray-300 rounded-lg bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="block w-full h-[42px] pl-3 pr-10 py-2 border border-gray-300 rounded-lg bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-400"
                 value={patientStatusFilter}
                 onChange={(e) => setPatientStatusFilter(e.target.value)}
               >
-                <option value="">All Patient Statuses</option>
+                <option value="" className="text-gray-400">
+                  All Patient Statuses
+                </option>
                 {patientStatusOptions.map((status) => (
-                  <option key={status} value={status}>
+                  <option key={status} value={status} className="text-gray-400">
                     {status}
                   </option>
                 ))}
@@ -344,39 +522,7 @@ export default function QueuePage() {
         </>
       )}
 
-      {loading ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {bookings.length > 0 ? (
-            bookings.map(renderBookingCard)
-          ) : (
-            <div className="text-center py-10">
-              <svg
-                className="mx-auto h-12 w-12 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <h3 className="mt-2 text-lg font-medium text-gray-900">
-                No bookings found
-              </h3>
-              <p className="mt-1 text-gray-500">
-                There are currently no appointments in this category.
-              </p>
-            </div>
-          )}
-        </div>
-      )}
+      {renderContent()}
 
       {showModal && (
         <CreateAppointment
