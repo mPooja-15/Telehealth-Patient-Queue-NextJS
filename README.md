@@ -238,7 +238,7 @@ This project is licensed under the MIT License.
 ## 🆘 Support
 
 For issues or questions:
-1. Check the `SETUP.md` file for detailed instructions
+1. Check the `README.md` file for detailed instructions
 2. Review the troubleshooting section
 3. Open an issue on GitHub
 
