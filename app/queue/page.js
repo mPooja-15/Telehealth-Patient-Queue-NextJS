@@ -57,6 +57,13 @@ export default function QueuePage() {
     setRole(patientData?.role || "patient");
   };
 
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (!error) {
+      window.location.href = '/login';
+    }
+  };
+
   const fetchStatusCounts = async () => {
     const { data, error } = await supabase.rpc("get_status_counts");
     if (!error && data) {
@@ -429,10 +436,31 @@ export default function QueuePage() {
             Manage patient appointments and status
           </p>
         </div>
-        {role === "patient" && (
+        <div className="flex items-center space-x-4">
+          {role === "patient" && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-sm transition-colors flex items-center space-x-2"
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                />
+              </svg>
+              <span>Create Appointment</span>
+            </button>
+          )}
           <button
-            onClick={() => setShowModal(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-sm transition-colors flex items-center space-x-2"
+            onClick={handleLogout}
+            className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg shadow-sm transition-colors flex items-center space-x-2"
           >
             <svg
               className="w-5 h-5"
@@ -444,12 +472,12 @@ export default function QueuePage() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
               />
             </svg>
-            <span>Create Appointment</span>
+            <span>Logout</span>
           </button>
-        )}
+        </div>
       </div>
 
       {role !== "patient" && (
